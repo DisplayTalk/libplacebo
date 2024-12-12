@@ -99,13 +99,13 @@ void pl_tone_map_params_infer(struct pl_tone_map_params *par)
     fix_constants(&par->constants);
 
     // Constrain the input peak to be no less than target SDR white
-    float sdr = pl_hdr_rescale(par->output_scaling, par->input_scaling, par->output_max);
-    sdr = fminf(sdr, pl_hdr_rescale(PL_HDR_NITS, par->input_scaling, PL_COLOR_SDR_WHITE));
-    par->input_max = fmaxf(par->input_max, sdr);
+    //float sdr = pl_hdr_rescale(par->output_scaling, par->input_scaling, par->output_max);
+    //sdr = fminf(sdr, pl_hdr_rescale(PL_HDR_NITS, par->input_scaling, PL_COLOR_SDR_WHITE));
+    //par->input_max = fmaxf(par->input_max, sdr);
 
     // Constrain the output peak if function does not support inverse mapping
-    if (!par->function->map_inverse)
-        par->output_max = fminf(par->output_max, par->input_max);
+    //if (!par->function->map_inverse)
+    //    par->output_max = fminf(par->output_max, par->input_max);
 }
 
 // Infer params and rescale to function scaling
