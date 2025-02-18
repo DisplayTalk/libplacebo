@@ -929,10 +929,10 @@ enum {
     // by half the PQ range (~90 nits), effectively clumping the SDR part
     // of the image into a single histogram bin.
     HIST_BITS   = 7,
-    HIST_BIAS   = 1 << (HIST_BITS - 1),
+    HIST_BIAS   = 0, //Change here!
+    // In the version before, the histogram was splitted into <100nits and >100nits. 
+    // Everything under 100nits wasnt practically useable.
     HIST_BINS   = (1 << HIST_BITS) - HIST_BIAS,
-
-    // Convert from histogram bin to (starting) PQ value
 #define HIST_PQ(bin) (((bin) + HIST_BIAS) << (PQ_BITS - HIST_BITS))
 };
 
@@ -1112,20 +1112,40 @@ static void update_peak_buf(pl_gpu gpu, struct sh_color_map_obj *obj, bool force
         return;
     }
 
+static float measure_black(const struct peak_buf_data *data, float percentile)
+{
+    unsigned next = 0;
+    float slice_ratio = 0;
+    for (int i = 0; i < HIST_BINS; i++) {
+        for (int k = 0; k < SLICES; k++){
+            next += data->frame_hist[k][i];
+            if (next < 10000) //Counterpart to the hdr-peak-percentile, the first 10'000 pixels are ignored.
+                slice_ratio = k; // will be updated until 10'000 pixels are reached. Yes! The if function will be entered every time until that.
+            //most movies have slight noise, therefore this is senseful to clip them.
+        }
+        if (next < 1000)
+            continue;
+        const float ratio = slice_ratio / SLICES;
+        const float pq_low  = (float) HIST_PQ(i) / PQ_MAX+0.000001f; // somehow, a total zero would throw the peak detection out.
+        const float pq_high = (float) HIST_PQ(i+1) / PQ_MAX;
+        return PL_MIX(pq_low, pq_high, ratio);
+    }
+}
+
     uint64_t frame_sum_pq = 0u, frame_wg_count = 0u, frame_wg_active = 0u;
     for (int k = 0; k < SLICES; k++) {
         frame_sum_pq    += data.frame_sum_pq[k];
         frame_wg_count  += data.frame_wg_count[k];
         frame_wg_active += data.frame_wg_active[k];
     }
-    float avg_pq, max_pq;
-    if (frame_wg_active) {
-        avg_pq = (float) frame_sum_pq / (frame_wg_active * PQ_MAX);
-        max_pq = measure_peak(&data, params->percentile);
-    } else {
-        // Solid black frame
-        avg_pq = max_pq = PL_COLOR_HDR_BLACK;
-    }
+  float avg_pq, max_pq;
+if (frame_wg_active) {
+    avg_pq = measure_black(&data, params->percentile);
+    max_pq = measure_peak(&data, params->percentile);
+} else {
+    // Solid black frame
+    avg_pq = max_pq = PL_COLOR_HDR_BLACK;
+}
 
     if (!obj->peak.avg_pq) {
         // Set the initial value accordingly if it contains no data
