@@ -226,9 +226,11 @@ const struct pl_tone_map_function pl_tone_map_clip = {
 static void st2094_pick_knee(float *out_src_knee, float *out_dst_knee,
                              const struct pl_tone_map_params *params)
 {
-    const float src_min = pl_hdr_rescale(params->input_scaling,  PL_HDR_PQ, params->input_min);
+    
+    const float new_input_min = PL_MIN(params->output_min, params->input_avg);
+    const float src_min = pl_hdr_rescale(params->input_scaling,  PL_HDR_PQ, new_input_min);
     const float src_max = pl_hdr_rescale(params->input_scaling,  PL_HDR_PQ, params->input_max);
-    const float src_avg = pl_hdr_rescale(params->input_scaling,  PL_HDR_PQ, params->input_avg);
+    const float src_avg = pl_hdr_rescale(params->input_scaling,  PL_HDR_PQ, new_input_min);
     const float dst_min = pl_hdr_rescale(params->output_scaling, PL_HDR_PQ, params->output_min);
     const float dst_max = pl_hdr_rescale(params->output_scaling, PL_HDR_PQ, params->output_max);
 
@@ -551,10 +553,10 @@ static void spline(float *lut, const struct pl_tone_map_params *params)
 {
     float src_pivot, dst_pivot;
     st2094_pick_knee(&src_pivot, &dst_pivot, params);
-
+    const float new_input_min = PL_MIN(params->output_min, params->input_avg);
     // Solve for linear knee (Pa = 0)
     float slope = (dst_pivot - params->output_min) /
-                  (src_pivot - params->input_min);
+                  (src_pivot - new_input_min);
 
     // Tune the slope at the knee point slightly: raise it to a user-provided
     // gamma exponent, multiplied by an extra tuning coefficient designed to
@@ -562,12 +564,12 @@ static void spline(float *lut, const struct pl_tone_map_params *params)
     // closer to linear when the difference between peaks is high.
     float ratio = params->input_max / params->output_max - 1.0f;
     ratio = fclampf(params->constants.slope_tuning * ratio,
-                    params->constants.slope_offset,
-                    1.0f + params->constants.slope_offset);
+                params->constants.slope_offset,
+                1.0f + params->constants.slope_offset);
     slope = powf(slope, (1.0f - params->constants.spline_contrast) * ratio);
 
     // Normalize everything the pivot to make the math easier
-    const float in_min = params->input_min - src_pivot;
+    const float in_min = new_input_min - src_pivot;
     const float in_max = params->input_max - src_pivot;
     const float out_min = params->output_min - dst_pivot;
     const float out_max = params->output_max - dst_pivot;
