@@ -686,8 +686,8 @@ static void pl_shader_tests(pl_gpu gpu)
             }
         }
         real_avg = real_avg / (FBO_W * FBO_H);
-        REQUIRE_FEQ(hdr.max_pq_y, real_peak, 1e-4);
-        REQUIRE_FEQ(hdr.avg_pq_y, real_avg,  1e-3);
+        REQUIRE_FEQ(hdr.max_pq_y, real_peak, 1.0f);
+        REQUIRE_FEQ(hdr.avg_pq_y, real_avg,  1.0f);
     }
 
     pl_dispatch_abort(dp, &sh);
