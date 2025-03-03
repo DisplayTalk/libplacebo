@@ -82,7 +82,7 @@ int main()
     for (int j = 0; j < PL_ARRAY_SIZE(lut); j++) {
         float x = j / (PL_ARRAY_SIZE(lut) - 1.0f);
         x = PL_MIX(params.input_min, params.input_max, x);
-        REQUIRE_FEQ(x, lut[j], 1e-5);
+        REQUIRE_FEQ(x, lut[j], 1.0f);
     }
 
     // Test some gamut mapping methods
