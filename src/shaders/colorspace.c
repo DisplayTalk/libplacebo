@@ -915,7 +915,7 @@ static bool peak_detect_params_eq(const struct pl_peak_detect_params *a,
 enum {
     // Split the peak buffer into several independent slices to reduce pressure
     // on global atomics
-    SLICES = 12,
+    SLICES = 2,
 
     // How many bits to use for storing PQ data. Be careful when setting this
     // too high, as it may overflow `unsigned int` on large video sources.
@@ -928,8 +928,8 @@ enum {
     // How many bits to use for the histogram. We bias the histogram down
     // by half the PQ range (~90 nits), effectively clumping the SDR part
     // of the image into a single histogram bin.
-    HIST_BITS   = 7,
-    HIST_BIAS   = 1 << (HIST_BITS - 1),
+    HIST_BITS   = 10,
+    HIST_BIAS   = 0,
     HIST_BINS   = (1 << HIST_BITS) - HIST_BIAS,
 
     // Convert from histogram bin to (starting) PQ value
@@ -990,6 +990,7 @@ struct sh_color_map_obj {
         pl_buf readback;                        // readback buffer (fallback)
         float avg_pq;                           // current (smoothed) values
         float max_pq;
+        float frame_avg;
     } peak;
 };
 
@@ -1025,53 +1026,69 @@ static inline float iir_coeff(float rate)
 
 static float measure_peak(const struct peak_buf_data *data, float percentile)
 {
-    unsigned frame_max_pq = data->frame_max_pq[0];
-    for (int k = 1; k < SLICES; k++)
-        frame_max_pq = PL_MAX(frame_max_pq, data->frame_max_pq[k]);
-    const float frame_max = (float) frame_max_pq / PQ_MAX;
-    if (percentile <= 0 || percentile >= 100)
-        return frame_max;
+//    unsigned frame_max_pq = data->frame_max_pq[0];
+//    for (int k = 1; k < SLICES; k++)
+//        frame_max_pq = PL_MAX(frame_max_pq, data->frame_max_pq[k]);
+//    const float frame_max = (float) frame_max_pq / PQ_MAX;
+//    if (percentile <= 0 || percentile >= 100)
+//        return frame_max;
     unsigned total_pixels = 0;
-    for (int k = 0; k < SLICES; k++) {
+//    for (int k = 0; k < SLICES; k++) {
+//        for (int i = 0; i < HIST_BINS; i++)
+//            total_pixels += data->frame_hist[k][i];
+//    }
+//    if (!total_pixels) // no histogram data available?
+//        return frame_max;
+//
         for (int i = 0; i < HIST_BINS; i++)
-            total_pixels += data->frame_hist[k][i];
-    }
-    if (!total_pixels) // no histogram data available?
-        return frame_max;
-
+            total_pixels += data->frame_hist[0][i] + data->frame_hist[1][i];
     const unsigned target_pixel = ceilf(percentile / 100.0f * total_pixels);
-    if (target_pixel >= total_pixels)
-        return frame_max;
+//    if (target_pixel >= total_pixels)
+//        return frame_max;
 
     unsigned sum = 0;
     for (int i = 0; i < HIST_BINS; i++) {
-        unsigned next = sum;
-        for (int k = 0; k < SLICES; k++)
-            next += data->frame_hist[k][i];
-        if (next < target_pixel) {
-            sum = next;
+//        unsigned next = sum;
+//        for (int k = 0; k < SLICES; k++)
+//            next += data->frame_hist[k][i];
+//        if (next < target_pixel) {
+//            sum = next;
+        sum += data->frame_hist[0][i]+data->frame_hist[1][i];
+        if (sum < target_pixel)
             continue;
-        }
-
-        // Upper and lower frequency boundaries of the matching histogram bin
-        const unsigned count_low  = sum;      // last pixel of previous bin
-        const unsigned count_high = next + 1; // first pixel of next bin
-        pl_assert(count_low < target_pixel && target_pixel < count_high);
-
-        // PQ luminance associated with count_low/high respectively
-        const float pq_low  = (float) HIST_PQ(i)     / PQ_MAX;
-        float pq_high       = (float) HIST_PQ(i + 1) / PQ_MAX;
-        if (count_high > total_pixels) // special case for last histogram bin
-            pq_high = frame_max;
-
-        // Position of `target_pixel` inside this bin, assumes pixels are
-        // equidistributed inside a histogram bin
-        const float ratio = (float) (target_pixel - count_low) /
-                                    (count_high - count_low);
-        return PL_MIX(pq_low, pq_high, ratio);
+//        }
+//
+//        // Upper and lower frequency boundaries of the matching histogram bin
+//        const unsigned count_low  = sum;      // last pixel of previous bin
+//        const unsigned count_high = next + 1; // first pixel of next bin
+//        pl_assert(count_low < target_pixel && target_pixel < count_high);
+//
+//        // PQ luminance associated with count_low/high respectively
+//        const float pq_low  = (float) HIST_PQ(i)     / PQ_MAX;
+//        float pq_high       = (float) HIST_PQ(i + 1) / PQ_MAX;
+//        if (count_high > total_pixels) // special case for last histogram bin
+//            pq_high = frame_max;
+//
+//        // Position of `target_pixel` inside this bin, assumes pixels are
+//        // equidistributed inside a histogram bin
+//        const float ratio = (float) (target_pixel - count_low) /
+//                                    (count_high - count_low);
+//        return PL_MIX(pq_low, pq_high, ratio);
+        return (float) HIST_PQ(i)     / PQ_MAX;
     }
+{
+//    pl_unreachable();
+static float measure_black(const struct peak_buf_data *data)
+{
+        const unsigned target_pixel = 60000;
 
-    pl_unreachable();
+    unsigned sum = 0;
+    for (int i = 1; i < HIST_BINS; i++) {
+        sum += data->frame_hist[0][i]+data->frame_hist[1][i];
+        if (sum < target_pixel)
+            continue;
+        return (float) HIST_PQ(i)     / PQ_MAX;
+    }
 }
 
 // if `force` is true, ensures the buffer is read, even if `allow_delayed`
@@ -1118,44 +1135,79 @@ static void update_peak_buf(pl_gpu gpu, struct sh_color_map_obj *obj, bool force
         frame_wg_count  += data.frame_wg_count[k];
         frame_wg_active += data.frame_wg_active[k];
     }
-    float avg_pq, max_pq;
-    if (frame_wg_active) {
-        avg_pq = (float) frame_sum_pq / (frame_wg_active * PQ_MAX);
-        max_pq = measure_peak(&data, params->percentile);
-    } else {
-        // Solid black frame
-        avg_pq = max_pq = PL_COLOR_HDR_BLACK;
-    }
+//    float avg_pq, max_pq;
+//    if (frame_wg_active) {
+//        avg_pq = (float) frame_sum_pq / (frame_wg_active * PQ_MAX);
+//        max_pq = measure_peak(&data, params->percentile);
+//    } else {
+//        // Solid black frame
+//        avg_pq = max_pq = PL_COLOR_HDR_BLACK;
+//    }
+    float avg_pq, max_pq, frame_avg;
 
-    if (!obj->peak.avg_pq) {
-        // Set the initial value accordingly if it contains no data
+    const float frame_min_nits = pl_hdr_rescale(PL_HDR_PQ, PL_HDR_NITS, measure_black(&data));
+    frame_avg = (float) frame_sum_pq / (frame_wg_active * PQ_MAX);
+    const float frame_avg_200_nits = pl_hdr_rescale(PL_HDR_PQ, PL_HDR_NITS, frame_avg) / 200;
+    avg_pq = pl_hdr_rescale(PL_HDR_NITS, PL_HDR_PQ, frame_min_nits - frame_avg_200_nits);
+    max_pq = measure_peak(&data, params->percentile);
+
+//    if (!obj->peak.avg_pq) {
+//        // Set the initial value accordingly if it contains no data
+    // Set the initial value accordingly if it contains no data
+    if (!obj->peak.frame_avg)
+        obj->peak.frame_avg =frame_avg;
+    if (!obj->peak.avg_pq)
         obj->peak.avg_pq = avg_pq;
+    if (!obj->peak.max_pq)
         obj->peak.max_pq = max_pq;
-    } else {
-        // Ignore small deviations from existing peak (rounding error)
-        static const float epsilon = 1.0f / PQ_MAX;
-        if (fabsf(avg_pq - obj->peak.avg_pq) < epsilon)
-            avg_pq = obj->peak.avg_pq;
-        if (fabsf(max_pq - obj->peak.max_pq) < epsilon)
-            max_pq = obj->peak.max_pq;
-    }
+//    } else {
+//        // Ignore small deviations from existing peak (rounding error)
+//        static const float epsilon = 1.0f / PQ_MAX;
+//        if (fabsf(avg_pq - obj->peak.avg_pq) < epsilon)
+//            avg_pq = obj->peak.avg_pq;
+//        if (fabsf(max_pq - obj->peak.max_pq) < epsilon)
+//            max_pq = obj->peak.max_pq;
+//    }
 
-    // Use an IIR low-pass filter to smooth out the detected values
-    const float coeff = iir_coeff(params->smoothing_period);
-    obj->peak.avg_pq += coeff * (avg_pq - obj->peak.avg_pq);
-    obj->peak.max_pq += coeff * (max_pq - obj->peak.max_pq);
+//    // Use an IIR low-pass filter to smooth out the detected values
+//    const float coeff = iir_coeff(params->smoothing_period);
+//    obj->peak.avg_pq += coeff * (avg_pq - obj->peak.avg_pq);
+//    obj->peak.max_pq += coeff * (max_pq - obj->peak.max_pq);
+//
+//    // Scene change hysteresis
+//    if (params->scene_threshold_low > 0 && params->scene_threshold_high > 0) {
+//        const float log10_pq = 1e-2f; // experimentally determined approximate
+//        const float thresh_low = params->scene_threshold_low * log10_pq;
+//        const float thresh_high = params->scene_threshold_high * log10_pq;
+//        const float bias = (float) frame_wg_active / frame_wg_count;
+//        const float delta = bias * fabsf(avg_pq - obj->peak.avg_pq);
+//        const float mix_coeff = pl_smoothstep(thresh_low, thresh_high, delta);
+//        obj->peak.avg_pq = PL_MIX(obj->peak.avg_pq, avg_pq, mix_coeff);
+//        obj->peak.max_pq = PL_MIX(obj->peak.max_pq, max_pq, mix_coeff);
+//    }
 
-    // Scene change hysteresis
-    if (params->scene_threshold_low > 0 && params->scene_threshold_high > 0) {
-        const float log10_pq = 1e-2f; // experimentally determined approximate
-        const float thresh_low = params->scene_threshold_low * log10_pq;
-        const float thresh_high = params->scene_threshold_high * log10_pq;
-        const float bias = (float) frame_wg_active / frame_wg_count;
-        const float delta = bias * fabsf(avg_pq - obj->peak.avg_pq);
-        const float mix_coeff = pl_smoothstep(thresh_low, thresh_high, delta);
-        obj->peak.avg_pq = PL_MIX(obj->peak.avg_pq, avg_pq, mix_coeff);
-        obj->peak.max_pq = PL_MIX(obj->peak.max_pq, max_pq, mix_coeff);
-    }
+    const float smooth_coeff = iir_coeff(params->smoothing_period);
+    if (
+        (frame_avg > obj->peak.frame_avg*(1.0f+(float)params->scene_threshold_low/7.0f) ||  // avg should be controlled relative, where [...]
+        frame_avg < obj->peak.frame_avg*(1.0f-(float)params->scene_threshold_low/7.0f))    // [...] threshold-setting in mpv.conf is absolute (in pq-%), where 7% pq-min equals to the display min.
+        &&
+        (avg_pq > obj->peak.avg_pq + 0.01f*(float)params->scene_threshold_low ||
+        avg_pq < obj->peak.avg_pq - 0.01f*(float)params->scene_threshold_low)
+    )
+        obj->peak.avg_pq = avg_pq;
+        else
+            obj->peak.avg_pq += smooth_coeff * (avg_pq - obj->peak.avg_pq);
+    if (
+        (frame_avg >    obj->peak.frame_avg * (1.0f+(float)params->scene_threshold_high) ||
+        frame_avg <    obj->peak.frame_avg * (1.0f-(float)params->scene_threshold_high)        )
+        &&
+        (max_pq >       obj->peak.max_pq    * (1.0f+(float)params->scene_threshold_high) ||
+        max_pq <       obj->peak.max_pq    * (1.0f-(float)params->scene_threshold_high)        )
+    )
+        obj->peak.max_pq = max_pq;
+        else
+            obj->peak.max_pq += smooth_coeff * (max_pq - obj->peak.max_pq);
+    obj->peak.frame_avg = frame_avg;
 }
 
 bool pl_shader_detect_peak(pl_shader sh, struct pl_color_space csp,
