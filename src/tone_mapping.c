@@ -227,8 +227,8 @@ const struct pl_tone_map_function pl_tone_map_clip = {
 static void st2094_pick_knee(float *out_src_knee, float *out_dst_knee,
                              const struct pl_tone_map_params *params)
 {
-
-    const float new_input_min = PL_MIN(params->output_min, params->input_avg);
+    //const float new_input_min = PL_MIN(params->output_min, params->input_avg);
+     const float new_input_min = params->input_avg;
 
     const float src_min = pl_hdr_rescale(params->input_scaling,  PL_HDR_PQ, new_input_min);
     const float src_max = pl_hdr_rescale(params->input_scaling,  PL_HDR_PQ, params->input_max);
@@ -557,8 +557,8 @@ static void spline(float *lut, const struct pl_tone_map_params *params)
     st2094_pick_knee(&src_pivot, &dst_pivot, params);
 
     // Solve for linear knee (Pa = 0)
-
-    const float new_input_min = PL_MIN(params->output_min, params->input_avg);
+    //const float new_input_min = PL_MIN(params->output_min, params->input_avg);
+    const float new_input_min = params->input_avg;
 
     float slope = (dst_pivot - params->output_min) / (src_pivot - params->input_min);//new_input_min);
     float ratio = params->input_max / params->output_max - 1.0f;
