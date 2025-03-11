@@ -1089,12 +1089,10 @@ static void update_peak_buf(pl_gpu gpu, struct sh_color_map_obj *obj, bool force
         frame_wg_count  += data.frame_wg_count[k];
         frame_wg_active += data.frame_wg_active[k];
     }
-    float avg_pq, max_pq, frame_avg;
 
-    const float frame_min_nits = pl_hdr_rescale(PL_HDR_PQ, PL_HDR_NITS, measure_black(&data));
+    float frame_avg,avg_pq,max_pq;
     frame_avg = (float) frame_sum_pq / (frame_wg_active * PQ_MAX);
-    const float frame_avg_200_nits = pl_hdr_rescale(PL_HDR_PQ, PL_HDR_NITS, frame_avg) / 200;
-    avg_pq = pl_hdr_rescale(PL_HDR_NITS, PL_HDR_PQ, frame_min_nits - frame_avg_200_nits);
+    avg_pq = measure_black(&data);
     max_pq = measure_peak(&data, params->percentile);
 
     // Set the initial value accordingly if it contains no data
