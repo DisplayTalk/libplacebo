@@ -430,6 +430,7 @@ bool pl_hdr_metadata_equal(const struct pl_hdr_metadata *a,
            a->scene_avg == b->scene_avg &&
            pl_hdr_bezier_equal(&a->ootf, &b->ootf) &&
            a->max_pq_y == b->max_pq_y &&
+           a->min_pq_y == b->min_pq_y &&
            a->avg_pq_y == b->avg_pq_y;
 }
 
@@ -453,6 +454,8 @@ void pl_hdr_metadata_merge(struct pl_hdr_metadata *orig,
         orig->ootf = update->ootf;
     if (!orig->max_pq_y)
         orig->max_pq_y = update->max_pq_y;
+    if (!orig->min_pq_y)
+        orig->min_pq_y = update->min_pq_y;
     if (!orig->avg_pq_y)
         orig->avg_pq_y = update->avg_pq_y;
 }
@@ -793,6 +796,7 @@ void pl_color_space_nominal_luma_ex(const struct pl_nominal_luma_params *params)
     {
         max_luma = pl_hdr_rescale(PL_HDR_PQ, scaling, csp->hdr.max_pq_y);
         avg_luma = pl_hdr_rescale(PL_HDR_PQ, scaling, csp->hdr.avg_pq_y);
+        min_luma = pl_hdr_rescale(PL_HDR_PQ, scaling, csp->hdr.min_pq_y);
     }
 
     // Clamp to sane value range
@@ -805,7 +809,7 @@ void pl_color_space_nominal_luma_ex(const struct pl_nominal_luma_params *params)
 
     // PQ is always scaled down to absolute black, ignoring HDR metadata
     if (csp->transfer == PL_COLOR_TRC_PQ)
-        min_luma = hdr_min;
+        min_luma = pl_hdr_rescale(PL_HDR_PQ, scaling, csp->hdr.min_pq_y);
 
     // Baseline/fallback metadata, inferred entirely from the colorspace
     // description and built-in default assumptions
