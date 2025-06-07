@@ -916,14 +916,14 @@ enum {
     //
     // The value chosen is enough to guarantee no overflow for an 8K x 4K frame
     // consisting entirely of 100% 10k nits PQ values, with 16x16 workgroups.
-    PQ_BITS     = 14,
+    PQ_BITS     = 12,
     PQ_MAX      = (1 << PQ_BITS) - 1,
 
     // How many bits to use for the histogram. We bias the histogram down
     // by half the PQ range (~90 nits), effectively clumping the SDR part
     // of the image into a single histogram bin.
-    HIST_BITS   = 7,
-    HIST_BIAS   = 1 << (HIST_BITS - 1),
+    HIST_BITS   = 12,
+    HIST_BIAS   = 0,
     HIST_BINS   = (1 << HIST_BITS) - HIST_BIAS,
 
     // Convert from histogram bin to (starting) PQ value
@@ -984,6 +984,7 @@ struct sh_color_map_obj {
         pl_buf readback;                        // readback buffer (fallback)
         float avg_pq;                           // current (smoothed) values
         float max_pq;
+        float min_pq;
     } peak;
 };
 
@@ -1023,20 +1024,21 @@ static float measure_peak(const struct peak_buf_data *data, float percentile)
     for (int k = 1; k < SLICES; k++)
         frame_max_pq = PL_MAX(frame_max_pq, data->frame_max_pq[k]);
     const float frame_max = (float) frame_max_pq / PQ_MAX;
-    if (percentile <= 0 || percentile >= 100)
+    if (percentile <= 0 || percentile >= 100) {
         return frame_max;
+    }
     unsigned total_pixels = 0;
     for (int k = 0; k < SLICES; k++) {
         for (int i = 0; i < HIST_BINS; i++)
             total_pixels += data->frame_hist[k][i];
     }
-    if (!total_pixels) // no histogram data available?
+    if (!total_pixels) { // no histogram data available?
         return frame_max;
-
+    }
     const unsigned target_pixel = ceilf(percentile / 100.0f * total_pixels);
-    if (target_pixel >= total_pixels)
+    if (target_pixel >= total_pixels) {
         return frame_max;
-
+    }
     unsigned sum = 0;
     for (int i = 0; i < HIST_BINS; i++) {
         unsigned next = sum;
@@ -1062,10 +1064,43 @@ static float measure_peak(const struct peak_buf_data *data, float percentile)
         // equidistributed inside a histogram bin
         const float ratio = (float) (target_pixel - count_low) /
                                     (count_high - count_low);
+
         return PL_MIX(pq_low, pq_high, ratio);
     }
 
     pl_unreachable();
+}
+
+static float measure_black(const struct peak_buf_data *data, float percentile, float maxadvance)
+{
+    if (percentile <= 0 || percentile >= 100)
+        return PL_COLOR_HDR_BLACK;
+
+    unsigned total_pixels = 0;
+    for (int i = 0; i < HIST_BINS; i++) {
+        for (int k = 0; k < SLICES; k++) {
+            total_pixels += data->frame_hist[k][i] + data->frame_hist[k][i];
+        }
+    }
+    if (!total_pixels) // no histogram data available?
+        return PL_COLOR_HDR_BLACK;
+    const unsigned target_pixel = ceilf(percentile / 100.0f * total_pixels);
+    if (target_pixel >= total_pixels)
+        return PL_COLOR_HDR_BLACK;
+
+    unsigned sum = 0;
+    float return_value = 0;
+    for (int i = 1; i < HIST_BINS; i++) {
+        for (int k = 0; k < SLICES; k++) {
+            sum += data->frame_hist[k][i]+data->frame_hist[k][i];
+        }
+        if (sum > target_pixel){
+            return_value = (float)HIST_PQ(i) / PQ_MAX;
+            break;}
+    }
+    if (return_value > (maxadvance/100.0f))
+        return_value = maxadvance/100.0f;
+    return return_value;
 }
 
 // if `force` is true, ensures the buffer is read, even if `allow_delayed`
@@ -1112,44 +1147,51 @@ static void update_peak_buf(pl_gpu gpu, struct sh_color_map_obj *obj, bool force
         frame_wg_count  += data.frame_wg_count[k];
         frame_wg_active += data.frame_wg_active[k];
     }
-    float avg_pq, max_pq;
+    float avg_pq, max_pq, min_pq;
     if (frame_wg_active) {
         avg_pq = (float) frame_sum_pq / (frame_wg_active * PQ_MAX);
         max_pq = measure_peak(&data, params->percentile);
+        min_pq = measure_black(&data, params->black_percentile, params->black_maxadvance);
     } else {
         // Solid black frame
-        avg_pq = max_pq = PL_COLOR_HDR_BLACK;
+        avg_pq = max_pq = min_pq = PL_COLOR_HDR_BLACK;
     }
 
-    if (!obj->peak.avg_pq) {
-        // Set the initial value accordingly if it contains no data
+    // Set the initial value accordingly if it contains no data
+    if (!obj->peak.min_pq)
+        obj->peak.min_pq =min_pq;
+    if (!obj->peak.avg_pq)
         obj->peak.avg_pq = avg_pq;
+    if (!obj->peak.max_pq)
         obj->peak.max_pq = max_pq;
-    } else {
-        // Ignore small deviations from existing peak (rounding error)
-        static const float epsilon = 1.0f / PQ_MAX;
-        if (fabsf(avg_pq - obj->peak.avg_pq) < epsilon)
-            avg_pq = obj->peak.avg_pq;
-        if (fabsf(max_pq - obj->peak.max_pq) < epsilon)
-            max_pq = obj->peak.max_pq;
-    }
-
-    // Use an IIR low-pass filter to smooth out the detected values
-    const float coeff = iir_coeff(params->smoothing_period);
-    obj->peak.avg_pq += coeff * (avg_pq - obj->peak.avg_pq);
-    obj->peak.max_pq += coeff * (max_pq - obj->peak.max_pq);
 
     // Scene change hysteresis
-    if (params->scene_threshold_low > 0 && params->scene_threshold_high > 0) {
-        const float log10_pq = 1e-2f; // experimentally determined approximate
-        const float thresh_low = params->scene_threshold_low * log10_pq;
-        const float thresh_high = params->scene_threshold_high * log10_pq;
-        const float bias = (float) frame_wg_active / frame_wg_count;
-        const float delta = bias * fabsf(avg_pq - obj->peak.avg_pq);
-        const float mix_coeff = pl_smoothstep(thresh_low, thresh_high, delta);
-        obj->peak.avg_pq = PL_MIX(obj->peak.avg_pq, avg_pq, mix_coeff);
-        obj->peak.max_pq = PL_MIX(obj->peak.max_pq, max_pq, mix_coeff);
+    // NEW: Completely different scene-change-detection algorithm, because the old one was not perfect and lead to screen flickering, as the black_detection feature is really sensitive.
+    const float smooth_coeff = iir_coeff(params->smoothing_period);
+    if (
+        (avg_pq > (obj->peak.avg_pq + 0.01f*(float)params->scene_threshold_avg) ||  // avg should be controlled relative, where [...]
+         avg_pq < (obj->peak.avg_pq - 0.01f*(float)params->scene_threshold_avg))    // [...] threshold-setting in mpv.conf is absolute (in pq-%), where 7% pq-min equals to the display min.
+        &&
+        (min_pq > (obj->peak.min_pq + 0.01f*(float)params->scene_threshold_low) ||
+         min_pq < (obj->peak.min_pq - 0.01f*(float)params->scene_threshold_low))
+    ) {
+        obj->peak.min_pq = min_pq;
+    } else {
+        obj->peak.min_pq += smooth_coeff * (min_pq - obj->peak.min_pq);
     }
+
+    if (
+        (avg_pq > (obj->peak.avg_pq + 0.01f*(float)params->scene_threshold_avg) ||
+         avg_pq < (obj->peak.avg_pq - 0.01f*(float)params->scene_threshold_avg))
+        &&
+        (max_pq > (obj->peak.max_pq + 0.01f*(float)params->scene_threshold_high) ||
+         max_pq < (obj->peak.max_pq - 0.01f*(float)params->scene_threshold_high))
+    ) {
+        obj->peak.max_pq = max_pq;
+    } else {
+        obj->peak.max_pq += smooth_coeff * (max_pq - obj->peak.max_pq);
+    }
+    obj->peak.avg_pq = avg_pq;
 }
 
 bool pl_shader_detect_peak(pl_shader sh, struct pl_color_space csp,
@@ -1364,6 +1406,7 @@ bool pl_get_detected_hdr_metadata(const pl_shader_obj state,
 
     out->max_pq_y = obj->peak.max_pq;
     out->avg_pq_y = obj->peak.avg_pq;
+    out->min_pq_y = obj->peak.min_pq;
     return true;
 }
 
@@ -1923,12 +1966,11 @@ void pl_shader_color_map_ex(pl_shader sh, const struct pl_color_map_params *para
             GLSL("ipt.x = tone_map(ipt.x); \n");
         }
 
-        // Avoid raising saturation excessively when raising brightness, and
-        // also desaturate when reducing brightness greatly to account for the
+        // Desaturate when reducing brightness greatly to account for the
         // reduction in gamut volume.
         GLSL("vec2 hull = vec2(i_orig, ipt.x);                  \n"
              "hull = ((hull - 6.0) * hull + 9.0) * hull;        \n"
-             "ipt.yz *= min(i_orig / ipt.x, hull.y / hull.x);   \n");
+             "ipt.yz *= min(1.0, hull.y / hull.x);              \n");
     }
 
     if (need_gamut_map) {
