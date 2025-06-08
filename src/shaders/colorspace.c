@@ -1950,9 +1950,9 @@ void pl_shader_color_map_ex(pl_shader sh, const struct pl_color_map_params *para
         // Avoid raising saturation excessively when raising brightness, and
         // also desaturate when reducing brightness greatly to account for the
         // reduction in gamut volume.
-        GLSL("vec2 hull = vec2(i_orig, ipt.x);                  \n"
-             "hull = ((hull - 6.0) * hull + 9.0) * hull;        \n"
-             "ipt.yz *= min(i_orig / ipt.x, hull.y / hull.x);   \n");
+        //GLSL("vec2 hull = vec2(i_orig, ipt.x);                  \n"
+        //     "hull = ((hull - 6.0) * hull + 9.0) * hull;        \n"
+        //     "ipt.yz *= min(i_orig / ipt.x, hull.y / hull.x);   \n");
     }
 
     if (need_gamut_map) {
