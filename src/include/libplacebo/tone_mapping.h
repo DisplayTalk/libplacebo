@@ -130,7 +130,6 @@ struct pl_tone_map_constants {
     .linear_knee       = 0.3f, \
     .exposure          = 1.0f,
 
-
 struct pl_tone_map_params {
     // If `function` is NULL, defaults to `pl_tone_map_clip`.
     const struct pl_tone_map_function *function;
