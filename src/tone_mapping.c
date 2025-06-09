@@ -34,6 +34,7 @@ static void fix_constants(struct pl_tone_map_constants *c)
     c->slope_offset      = fclampf(c->slope_offset, 0.0f, 1.0f);
     c->spline_contrast   = fclampf(c->spline_contrast, 0.0f, 1.5f);
     c->reinhard_contrast = fclampf(c->reinhard_contrast, eps, 1.0f - eps);
+    c->min_peak          = fclampf(c->min_peak, 0.0f, 203.0f);
     c->linear_knee       = fclampf(c->linear_knee, eps, 1.0f - eps);
     c->exposure          = fclampf(c->exposure, eps, 10.0f);
 }
