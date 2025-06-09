@@ -104,7 +104,7 @@ struct pl_tone_map_constants {
     // reference white will be about half as bright as when clipping. (0,1)
     float reinhard_contrast;
 
-    //minimum peak brightness for the histogram
+    // min peak for the histogram
     float min_peak;
 
     // For legacy functions (mobius, gamma) which operate on linear light, this
@@ -126,9 +126,10 @@ struct pl_tone_map_constants {
     .slope_offset      = 0.2f, \
     .spline_contrast   = 0.5f, \
     .reinhard_contrast = 0.5f, \
-    .min_peak          = 50.0f \
+    .min_peak          = 1.0f, \
     .linear_knee       = 0.3f, \
     .exposure          = 1.0f,
+
 
 struct pl_tone_map_params {
     // If `function` is NULL, defaults to `pl_tone_map_clip`.
