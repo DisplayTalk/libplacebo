@@ -100,7 +100,7 @@ void pl_tone_map_params_infer(struct pl_tone_map_params *par)
     fix_constants(&par->constants);
 
     // Constrain the input peak to be no less than target SDR white
-    const float min_peak = params->constants.min_peak
+    const float min_peak = params->constants.min_peak;
     float sdr = pl_hdr_rescale(par->output_scaling, par->input_scaling, par->output_max);
     sdr = fminf(sdr, pl_hdr_rescale(PL_HDR_NITS, par->input_scaling, min_peak));
     par->input_max = fmaxf(par->input_max, sdr);
@@ -129,7 +129,7 @@ static struct pl_tone_map_params fix_params(const struct pl_tone_map_params *par
 }
 
 #define FOREACH_LUT(lut, V)                                                     \
-    for (float *_iter = lut, *_end = lut + params->lut_size, V;                 \
+    for (float *_iter = lut, *_end = lut + ->lut_size, V;                 \
          _iter < _end && ( V = *_iter, 1 ); *_iter++ = V)
 
 static void map_lut(float *lut, const struct pl_tone_map_params *params)
