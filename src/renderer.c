@@ -77,7 +77,7 @@ struct pl_renderer_t {
 
     // Temporary storage for vertex/index data
     PL_ARRAY(struct osd_vertex) osd_vertices;
-    PL_ARRAY(uint16_t) osd_indices;
+    PL_ARRAY(uint32_t) osd_indices;
     struct pl_vertex_attrib osd_attribs[3];
 
     // Frame cache (for frame mixing / interpolation)
@@ -994,6 +994,7 @@ static void draw_overlays(struct pass_state *pass, pl_tex fbo,
             .vertex_count = rr->osd_indices.num,
             .vertex_data = rr->osd_vertices.elem,
             .index_data = rr->osd_indices.elem,
+            .index_fmt = PL_INDEX_UINT32,
         ));
 
         if (!ok) {
@@ -1459,8 +1460,15 @@ static pl_fmt merge_fmt(struct pass_state *pass, const struct img *a,
     // Only return formats that support all relevant caps of both formats
     const enum pl_fmt_caps mask = PL_FMT_CAP_SAMPLEABLE | PL_FMT_CAP_LINEAR;
     enum pl_fmt_caps req_caps = (fmta->caps & mask) | (fmtb->caps & mask);
+    enum pl_fmt_type req_type = fmta->type;
 
-    return pl_find_fmt(rr->gpu, fmta->type, num_comps, min_depth, 0, req_caps);
+    // If we have integer formats on input, convert now to unorm.
+    if (req_type == PL_FMT_UINT) {
+        req_type = PL_FMT_UNORM;
+        req_caps = PL_FMT_CAP_SAMPLEABLE | PL_FMT_CAP_LINEAR;
+    }
+
+    return pl_find_fmt(rr->gpu, req_type, num_comps, min_depth, 0, req_caps);
 }
 
 // Applies a series of rough heuristics to figure out whether we expect any
@@ -1474,6 +1482,10 @@ static bool want_merge(struct pass_state *pass,
     const pl_renderer rr = pass->rr;
     if (!pass->fbofmt[4])
         return false;
+
+    // Integer input
+    if (ref->fmt->type == PL_FMT_UINT)
+        return true;
 
     // Debanding
     if (!(rr->errors & PL_RENDER_ERR_DEBANDING) && params->deband_params)
@@ -2469,13 +2481,20 @@ static bool pass_output_target(struct pass_state *pass)
         }
     }
 
-    if (img->comps == 4 && has_alpha)
-        pl_shader_set_alpha(sh, &img->repr, target->repr.alpha);
 
     // Apply the color scale separately, after encoding is done, to make sure
     // that the intermediate FBO (if any) has the correct precision.
     struct pl_color_repr repr = target->repr;
     float scale = pl_color_repr_normalize(&repr);
+
+    // If the alpha mode is already applied, don't double-apply it
+    if (img->repr.alpha == repr.alpha || !has_alpha || img->comps == 4) {
+        repr.alpha = PL_ALPHA_NONE;
+    } else {
+        // `pl_shader_encode_color` expects independent alpha
+        pl_shader_set_alpha(sh, &img->repr, PL_ALPHA_INDEPENDENT);
+    }
+
     enum pl_lut_type lut_type = guess_frame_lut_type(target, true);
     if (lut_type != PL_LUT_CONVERSION)
         pl_shader_encode_color(sh, &repr);
@@ -3099,10 +3118,6 @@ static bool draw_empty_overlays(pl_renderer rr,
                                 const struct pl_frame *ptarget,
                                 const struct pl_render_params *params)
 {
-    clear_target(rr, ptarget, params);
-    if (!ptarget->num_overlays)
-        return true;
-
     struct pass_state pass = {
         .rr = rr,
         .params = params,
@@ -3114,6 +3129,10 @@ static bool draw_empty_overlays(pl_renderer rr,
 
     if (!pass_init(&pass, false))
         return false;
+
+    clear_target(rr, ptarget, params);
+    if (!ptarget->num_overlays)
+        goto done;
 
     pass_begin_frame(&pass);
     struct pl_frame *target = &pass.target;
@@ -3143,6 +3162,7 @@ static bool draw_empty_overlays(pl_renderer rr,
                       &tscale);
     }
 
+done:
     pass_uninit(&pass);
     return true;
 }

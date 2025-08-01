@@ -477,6 +477,13 @@ pl_gpu pl_gpu_create_vk(struct vk_ctx *vk)
     }
 #endif
 
+    VkPhysicalDeviceHostImageCopyPropertiesEXT copy_props = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_PROPERTIES_EXT,
+    };
+
+    if (vk->CopyMemoryToImageEXT)
+        vk_link_struct(&props, &copy_props);
+
     vk->GetPhysicalDeviceProperties2(vk->physd, &props);
     VkPhysicalDeviceLimits limits = props.properties.limits;
 
@@ -514,6 +521,7 @@ pl_gpu pl_gpu_create_vk(struct vk_ctx *vk)
     }
 
     const size_t max_size = vk_malloc_avail(vk->ma, 0);
+    const size_t max_vram = vk_malloc_avail(vk->ma, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     gpu->limits = (struct pl_gpu_limits) {
         // pl_gpu
         .thread_safe        = true,
@@ -522,7 +530,7 @@ pl_gpu pl_gpu_create_vk(struct vk_ctx *vk)
         .max_buf_size       = max_size,
         .max_ubo_size       = PL_MIN(limits.maxUniformBufferRange, max_size),
         .max_ssbo_size      = PL_MIN(limits.maxStorageBufferRange, max_size),
-        .max_vbo_size       = vk_malloc_avail(vk->ma, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
+        .max_vbo_size       = max_vram,
         .max_mapped_size    = vk_malloc_avail(vk->ma, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT),
         .max_mapped_vram    = vk_malloc_avail(vk->ma, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                                                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
@@ -556,6 +564,9 @@ pl_gpu pl_gpu_create_vk(struct vk_ctx *vk)
         .compute_queues     = vk->pool_compute->num_queues,
     };
 
+    // Allow 1 kB of wiggle room in case of some internal reservation or off-by-one
+    p->rebar_enabled = (max_vram - gpu->limits.max_mapped_vram) < 1024;
+
     gpu->export_caps.buf = vk_malloc_handle_caps(vk->ma, false);
     gpu->import_caps.buf = vk_malloc_handle_caps(vk->ma, true);
     gpu->export_caps.tex = vk_tex_handle_caps(vk, false);
@@ -575,6 +586,16 @@ pl_gpu pl_gpu_create_vk(struct vk_ctx *vk)
 
     if (vk->CmdPushDescriptorSetKHR)
         p->max_push_descriptors = pushd_props.maxPushDescriptors;
+
+    if (copy_props.copyDstLayoutCount || copy_props.copySrcLayoutCount) {
+        PL_ARRAY_REALLOC(gpu, p->host_ul_layouts, copy_props.copyDstLayoutCount);
+        PL_ARRAY_REALLOC(gpu, p->host_dl_layouts, copy_props.copySrcLayoutCount);
+        p->host_ul_layouts.num = copy_props.copyDstLayoutCount;
+        p->host_dl_layouts.num = copy_props.copySrcLayoutCount;
+        copy_props.pCopyDstLayouts = p->host_ul_layouts.elem;
+        copy_props.pCopySrcLayouts = p->host_dl_layouts.elem;
+        vk->GetPhysicalDeviceProperties2(vk->physd, &props);
+    }
 
     vk_setup_formats(gpu);
 
